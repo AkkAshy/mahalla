@@ -18,6 +18,8 @@ class PointsModel(BaseModel):
     def __init__(self, db_manager):
         super().__init__(db_manager)
         self.table_name = "citizen_points"
+        print(f"Тип model: {type(self)}")
+        print(f"Значение model: {self}")
         self.required_fields = ['citizen_id', 'activity_type', 'points']
         
         # Конфигурация баллов из настроек

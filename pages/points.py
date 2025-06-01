@@ -390,8 +390,8 @@ def show_single_citizen_award_form(points_model: PointsModel, citizen_model: Cit
                     format_func=lambda x: meeting_options[x],
                     help="Опционально: заседание, за которое начисляются баллы"
                 )
-        
-        # Кнопка отправки
+        print(points_to_award)  # Для отладки
+            # Кнопка отправки
         submitted = st.form_submit_button(
             f"🏆 Начислить {points_to_award} баллов",
             use_container_width=True,

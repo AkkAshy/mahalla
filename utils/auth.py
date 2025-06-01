@@ -228,25 +228,29 @@ def check_session_timeout() -> bool:
         return False
     
     return True
+from config.settings import get_settings
 
 
-def check_authentication() -> bool:
-    """
-    Проверка аутентификации пользователя
-    
-    Returns:
-        True если пользователь аутентифицирован
-    """
-    init_session_state()
-    
-    # Проверяем таймаут сессии
-    if not check_session_timeout():
+def check_authentication():
+    if not st.session_state.get("authenticated", False):
+        with st.form("login_form"):
+            username = st.text_input("Логин")
+            password = st.text_input("Пароль", type="password")
+            submitted = st.form_submit_button("Войти")
+            if submitted:
+                settings = get_settings()
+                if username == settings.DEFAULT_ADMIN_LOGIN and password == settings.DEFAULT_ADMIN_PASSWORD:
+                    st.session_state["authenticated"] = True
+                    st.session_state["user"] = {
+                        "username": username,
+                        "role": "admin",
+                        "full_name": "Администратор"
+                    }
+                    st.session_state["login_time"] = datetime.now()
+                    st.rerun()
+                else:
+                    st.error("Неверный логин или пароль")
         return False
-    
-    if not st.session_state.authenticated:
-        show_login_form()
-        return False
-    
     return True
 
 
