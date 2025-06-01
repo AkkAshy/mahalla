@@ -19,6 +19,47 @@ from utils.helpers import (
 )
 from utils.auth import get_current_user_id, has_permission
 
+
+def safe_get(row_obj, key, default=None):
+    """Безопасное получение значения из sqlite3.Row или dict"""
+    try:
+        if row_obj is None:
+            return default
+        # Если это словарь
+        if hasattr(row_obj, 'get'):
+            return row_obj.get(key, default)
+        # Если это sqlite3.Row
+        elif hasattr(row_obj, '__getitem__'):
+            try:
+                return row_obj[key]
+            except (KeyError, IndexError):
+                return default
+        # Если это объект с атрибутами
+        elif hasattr(row_obj, key):
+            return getattr(row_obj, key, default)
+        else:
+            return default
+    except (KeyError, AttributeError, IndexError, TypeError):
+        return default
+
+
+def row_to_dict(row):
+    """Преобразование sqlite3.Row в словарь"""
+    if row is None:
+        return {}
+    try:
+        return dict(row)
+    except:
+        try:
+            # Альтернативный способ
+            result = {}
+            if hasattr(row, 'keys'):
+                for key in row.keys():
+                    result[key] = row[key]
+            return result
+        except:
+            return {}
+
 def show_points_page():
     """Главная функция страницы системы баллов"""
     
@@ -112,110 +153,136 @@ def show_points_main(points_model: PointsModel, citizen_model: CitizenModel):
     with col1:
         st.markdown("#### 🏆 Топ активных граждан")
         
-        top_citizens = points_model.get_leaderboard(limit=10)
-        
-        if top_citizens:
-            # Создаем красивое отображение топа
-            for i, citizen in enumerate(top_citizens, 1):
-                points = citizen.get('total_points', citizen.get('period_points', 0))
-                activities = citizen.get('activities_count', 0)
+        try:
+            top_citizens_raw = points_model.get_leaderboard(limit=10)
+            
+            if top_citizens_raw:
+                # Преобразуем в список словарей
+                top_citizens = []
+                for citizen_row in top_citizens_raw:
+                    citizen_dict = row_to_dict(citizen_row)
+                    if not citizen_dict:  # Если row_to_dict не сработал
+                        citizen_dict = {
+                            'id': safe_get(citizen_row, 'id'),
+                            'full_name': safe_get(citizen_row, 'full_name', 'Неизвестный'),
+                            'total_points': safe_get(citizen_row, 'total_points', safe_get(citizen_row, 'period_points', 0)),
+                            'activities_count': safe_get(citizen_row, 'activities_count', 0)
+                        }
+                    top_citizens.append(citizen_dict)
                 
-                # Медали для топ-3
-                if i == 1:
-                    medal = "🥇"
-                    color = "#FFD700"
-                elif i == 2:
-                    medal = "🥈" 
-                    color = "#C0C0C0"
-                elif i == 3:
-                    medal = "🥉"
-                    color = "#CD7F32"
-                else:
-                    medal = f"{i}."
-                    color = "#f8f9fa"
-                
-                with st.container():
-                    st.markdown(f"""
-                    <div style="
-                        background: linear-gradient(45deg, {color}20, {color}10);
-                        border-left: 4px solid {color};
-                        padding: 15px;
-                        border-radius: 8px;
-                        margin: 8px 0;
-                        display: flex;
-                        align-items: center;
-                    ">
-                        <div style="font-size: 24px; margin-right: 15px;">{medal}</div>
-                        <div style="flex-grow: 1;">
-                            <b>{citizen['full_name']}</b><br>
-                            <small>🏆 {points} баллов | 📊 {activities} активностей</small>
+                # Создаем красивое отображение топа
+                for i, citizen in enumerate(top_citizens, 1):
+                    points = safe_get(citizen, 'total_points', safe_get(citizen, 'period_points', 0))
+                    activities = safe_get(citizen, 'activities_count', 0)
+                    full_name = safe_get(citizen, 'full_name', 'Неизвестный')
+                    citizen_id = safe_get(citizen, 'id')
+                    
+                    # Медали для топ-3
+                    if i == 1:
+                        medal = "🥇"
+                        color = "#FFD700"
+                    elif i == 2:
+                        medal = "🥈" 
+                        color = "#C0C0C0"
+                    elif i == 3:
+                        medal = "🥉"
+                        color = "#CD7F32"
+                    else:
+                        medal = f"{i}."
+                        color = "#f8f9fa"
+                    
+                    with st.container():
+                        st.markdown(f"""
+                        <div style="
+                            background: linear-gradient(45deg, {color}20, {color}10);
+                            border-left: 4px solid {color};
+                            padding: 15px;
+                            border-radius: 8px;
+                            margin: 8px 0;
+                            display: flex;
+                            align-items: center;
+                        ">
+                            <div style="font-size: 24px; margin-right: 15px;">{medal}</div>
+                            <div style="flex-grow: 1;">
+                                <b>{full_name}</b><br>
+                                <small>🏆 {points} баллов | 📊 {activities} активностей</small>
+                            </div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    col_view, col_award = st.columns([1, 1])
-                    
-                    with col_view:
-                        if st.button("👁️ Подробнее", key=f"view_{citizen['id']}"):
-                            st.session_state.points_action = "citizen_details"
-                            st.session_state.citizen_details_id = citizen['id']
-                            st.rerun()
-                    
-                    with col_award:
-                        if st.button("🏆 Начислить", key=f"award_{citizen['id']}"):
-                            st.session_state.points_action = "award"
-                            st.session_state.selected_citizen_id = citizen['id']
-                            st.rerun()
-        else:
+                        """, unsafe_allow_html=True)
+                        
+                        col_view, col_award = st.columns([1, 1])
+                        
+                        with col_view:
+                            if st.button("👁️ Подробнее", key=f"view_{citizen_id}"):
+                                st.session_state.points_action = "citizen_details"
+                                st.session_state.citizen_details_id = citizen_id
+                                st.rerun()
+                        
+                        with col_award:
+                            if st.button("🏆 Начислить", key=f"award_{citizen_id}"):
+                                st.session_state.points_action = "award"
+                                st.session_state.selected_citizen_id = citizen_id
+                                st.rerun()
+            else:
+                st.info("🏆 Пока нет активных граждан с баллами")
+        except Exception as e:
             st.info("🏆 Пока нет активных граждан с баллами")
     
     with col2:
         st.markdown("#### 📊 Статистика активности")
         
         # Получаем статистику за последний месяц
-        monthly_stats = points_model.get_activity_statistics(30)
-        
-        if monthly_stats['by_activity_type']:
-            # График активности по типам
-            activity_data = monthly_stats['by_activity_type']
+        try:
+            monthly_stats = points_model.get_activity_statistics(30)
             
-            # Переводим названия активностей
-            activity_names = {
-                'meeting_attendance': 'Заседания',
-                'subbotnik': 'Субботники',
-                'community_work': 'Общ. работы',
-                'volunteer_work': 'Волонтерство',
-                'initiative': 'Инициативы'
-            }
-            
-            df_activity = pd.DataFrame(activity_data)
-            df_activity['display_name'] = df_activity['activity_type'].map(
-                lambda x: activity_names.get(x, x)
-            )
-            
-            fig = px.pie(
-                df_activity,
-                values='total_points',
-                names='display_name',
-                title="Баллы по видам активности"
-            )
-            
-            fig.update_traces(
-                textposition='inside',
-                textinfo='percent+label',
-                hovertemplate='<b>%{label}</b><br>Баллы: %{value}<br>Процент: %{percent}<extra></extra>'
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        else:
+            if monthly_stats and safe_get(monthly_stats, 'by_activity_type'):
+                # График активности по типам
+                activity_data = safe_get(monthly_stats, 'by_activity_type', [])
+                
+                # Переводим названия активностей
+                activity_names = {
+                    'meeting_attendance': 'Заседания',
+                    'subbotnik': 'Субботники',
+                    'community_work': 'Общ. работы',
+                    'volunteer_work': 'Волонтерство',
+                    'initiative': 'Инициативы'
+                }
+                
+                df_activity = pd.DataFrame(activity_data)
+                df_activity['display_name'] = df_activity['activity_type'].map(
+                    lambda x: activity_names.get(x, x)
+                )
+                
+                fig = px.pie(
+                    df_activity,
+                    values='total_points',
+                    names='display_name',
+                    title="Баллы по видам активности"
+                )
+                
+                fig.update_traces(
+                    textposition='inside',
+                    textinfo='percent+label',
+                    hovertemplate='<b>%{label}</b><br>Баллы: %{value}<br>Процент: %{percent}<extra></extra>'
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📊 Нет данных за последний месяц")
+        except Exception as e:
             st.info("📊 Нет данных за последний месяц")
         
         # Общие метрики за месяц
-        totals = monthly_stats.get('totals', {})
-        
-        st.metric("📈 Активностей", totals.get('total_activities', 0))
-        st.metric("⭐ Баллов начислено", totals.get('total_points_awarded', 0))
-        st.metric("👥 Активных граждан", totals.get('active_citizens_count', 0))
+        try:
+            totals = safe_get(monthly_stats, 'totals', {}) if 'monthly_stats' in locals() else {}
+            
+            st.metric("📈 Активностей", safe_get(totals, 'total_activities', 0))
+            st.metric("⭐ Баллов начислено", safe_get(totals, 'total_points_awarded', 0))
+            st.metric("👥 Активных граждан", safe_get(totals, 'active_citizens_count', 0))
+        except:
+            st.metric("📈 Активностей", 0)
+            st.metric("⭐ Баллов начислено", 0)
+            st.metric("👥 Активных граждан", 0)
     
     st.markdown("---")
     
@@ -234,40 +301,44 @@ def show_points_main(points_model: PointsModel, citizen_model: CitizenModel):
     st.markdown("---")
     st.markdown("#### 📊 Распределение граждан по баллам")
     
-    distribution = points_model.get_points_distribution()
-    
-    if distribution:
-        col1, col2 = st.columns([1, 1])
+    try:
+        distribution = points_model.get_points_distribution()
         
-        with col1:
-            # График распределения
-            fig = px.bar(
-                x=list(distribution.keys()),
-                y=list(distribution.values()),
-                title="Количество граждан по диапазонам баллов",
-                labels={'x': 'Диапазон баллов', 'y': 'Количество граждан'}
-            )
+        if distribution:
+            col1, col2 = st.columns([1, 1])
             
-            fig.update_layout(
-                showlegend=False,
-                xaxis_tickangle=-45
-            )
+            with col1:
+                # График распределения
+                fig = px.bar(
+                    x=list(distribution.keys()),
+                    y=list(distribution.values()),
+                    title="Количество граждан по диапазонам баллов",
+                    labels={'x': 'Диапазон баллов', 'y': 'Количество граждан'}
+                )
+                
+                fig.update_layout(
+                    showlegend=False,
+                    xaxis_tickangle=-45
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
             
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            # Таблица с распределением
-            df_dist = pd.DataFrame([
-                {"Диапазон": k, "Граждан": v, "Процент": f"{v/sum(distribution.values())*100:.1f}%"}
-                for k, v in distribution.items()
-            ])
-            
-            st.dataframe(
-                df_dist,
-                use_container_width=True,
-                hide_index=True
-            )
-    else:
+            with col2:
+                # Таблица с распределением
+                total_citizens = sum(distribution.values())
+                df_dist = pd.DataFrame([
+                    {"Диапазон": k, "Граждан": v, "Процент": f"{v/total_citizens*100:.1f}%" if total_citizens > 0 else "0%"}
+                    for k, v in distribution.items()
+                ])
+                
+                st.dataframe(
+                    df_dist,
+                    use_container_width=True,
+                    hide_index=True
+                )
+        else:
+            st.info("📊 Нет данных для отображения распределения")
+    except Exception as e:
         st.info("📊 Нет данных для отображения распределения")
 
 
@@ -298,266 +369,6 @@ def show_award_points_form(points_model: PointsModel, citizen_model: CitizenMode
         show_meeting_award_form(points_model, citizen_model, meeting_model)
 
 
-# def show_single_citizen_award_form(points_model: PointsModel, citizen_model: CitizenModel):
-#     """Форма начисления баллов одному гражданину - исправленная версия"""
-    
-#     # Создаем meeting_model внутри функции
-#     from models.meeting import MeetingModel
-#     from utils.helpers import format_date
-#     meeting_model = MeetingModel(citizen_model.db)
-    
-#     with st.form("single_award_form"):
-#         col1, col2 = st.columns(2)
-        
-#         with col1:
-#             # Выбор гражданина
-#             try:
-#                 st.write("🔍 Получаем список граждан...")
-#                 citizens_raw = citizen_model.get_active_citizens()
-#                 st.write(f"✅ Получено {len(citizens_raw)} граждан")
-                
-#                 # Преобразуем sqlite3.Row объекты в словари
-#                 citizens = []
-#                 for row in citizens_raw:
-#                     try:
-#                         # Преобразуем Row в словарь
-#                         citizen_dict = dict(row)
-#                         citizens.append(citizen_dict)
-#                     except Exception as row_error:
-#                         st.error(f"❌ Ошибка преобразования строки: {str(row_error)}")
-#                         # Альтернативный способ - через индексы
-#                         try:
-#                             citizen_dict = {
-#                                 'id': row[0],  # Предполагаем что id первый
-#                                 'full_name': row[1] if len(row) > 1 else 'Неизвестно',
-#                                 'total_points': row[2] if len(row) > 2 else 0
-#                             }
-#                             citizens.append(citizen_dict)
-#                         except:
-#                             st.error(f"❌ Не удалось обработать строку базы данных")
-#                             continue
-                
-#                 # Проверяем структуру данных граждан
-#                 if citizens:
-#                     st.write("🔍 Структура первого гражданина:")
-#                     first_citizen = citizens[0]
-#                     st.write(f"Keys: {list(first_citizen.keys())}")
-#                     st.write(f"Sample data: {first_citizen}")
-                
-#                 citizen_options = {}
-#                 for c in citizens:
-#                     try:
-#                         # Теперь это должно работать
-#                         if 'id' in c and 'full_name' in c:
-#                             citizen_options[c['id']] = c['full_name']
-#                         else:
-#                             st.error(f"❌ У гражданина нет нужных полей: {c}")
-#                     except Exception as citizen_error:
-#                         st.error(f"❌ Ошибка обработки гражданина: {str(citizen_error)}")
-                
-#                 st.write(f"✅ Создан словарь с {len(citizen_options)} гражданами")
-                
-#             except Exception as e:
-#                 st.error(f"❌ Ошибка получения граждан: {str(e)}")
-#                 st.error(f"Тип ошибки: {type(e).__name__}")
-#                 return
-            
-#             if not citizen_options:
-#                 st.error("❌ Нет активных граждан в системе")
-#                 return
-            
-#             selected_citizen_id = st.selectbox(
-#                 "Выберите гражданина *",
-#                 options=list(citizen_options.keys()),
-#                 format_func=lambda x: citizen_options.get(x, f"ID: {x}"),
-#                 help="Гражданин для начисления баллов"
-#             )
-            
-#             st.write(f"🔍 Выбранный ID: {selected_citizen_id} (type: {type(selected_citizen_id)})")
-            
-#             # Показываем текущие баллы
-#             if selected_citizen_id:
-#                 try:
-#                     citizen_raw = citizen_model.get_by_id(selected_citizen_id)
-#                     if citizen_raw:
-#                         # Преобразуем в словарь если это Row объект
-#                         if hasattr(citizen_raw, 'keys'):
-#                             citizen = dict(citizen_raw)
-#                         else:
-#                             citizen = citizen_raw
-                        
-#                         st.write(f"🔍 Данные гражданина: {citizen}")
-#                         current_points = citizen.get('total_points', 0) or 0
-#                         st.info(f"💰 Текущие баллы: **{current_points}**")
-#                     else:
-#                         st.warning("⚠️ Не удалось получить данные гражданина")
-#                 except Exception as citizen_error:
-#                     st.error(f"❌ Ошибка получения данных гражданина: {str(citizen_error)}")
-            
-#             # Тип активности
-#             activity_types = {
-#                 'meeting_attendance': {'display_name': 'Посещение заседания', 'points_value': 10},
-#                 'subbotnik': {'display_name': 'Участие в субботнике', 'points_value': 15},
-#                 'community_work': {'display_name': 'Общественная работа', 'points_value': 10},
-#                 'volunteer_work': {'display_name': 'Волонтерская деятельность', 'points_value': 12},
-#                 'initiative': {'display_name': 'Инициатива', 'points_value': 8}
-#             }
-            
-#             selected_activity = st.selectbox(
-#                 "Тип активности *",
-#                 options=list(activity_types.keys()),
-#                 format_func=lambda x: activity_types[x]['display_name'],
-#                 help="Вид деятельности за который начисляются баллы"
-#             )
-            
-#             default_points = activity_types[selected_activity]['points_value']
-#             st.caption(f"💡 Стандартно: {default_points} баллов")
-        
-#         with col2:
-#             # Количество баллов
-#             use_custom_points = st.checkbox("Использовать другое количество баллов")
-            
-#             if use_custom_points:
-#                 custom_points = st.number_input(
-#                     "Количество баллов *",
-#                     min_value=-1000,
-#                     max_value=1000,
-#                     value=default_points,
-#                     help="Пользовательское количество баллов"
-#                 )
-#                 points_to_award = custom_points
-#             else:
-#                 points_to_award = default_points
-#                 st.info(f"🏆 Будет начислено: **{points_to_award} баллов**")
-            
-#             # Описание
-#             description = st.text_area(
-#                 "Описание (опционально)",
-#                 placeholder="Дополнительная информация о начислении",
-#                 height=100,
-#                 help="Комментарий к начислению баллов"
-#             )
-            
-#             # Связь с заседанием - упрощенная версия
-#             st.info("📭 Связь с заседаниями временно отключена для диагностики")
-#             linked_meeting = None
-        
-#         # Кнопка отправки
-#         submitted = st.form_submit_button(
-#             f"🏆 Начислить {points_to_award} баллов",
-#             use_container_width=True,
-#             type="primary"
-#         )
-        
-#         if submitted:
-#             st.write("🔍 Начинаем процесс начисления баллов...")
-            
-#             if not selected_citizen_id or not selected_activity:
-#                 st.error("❌ Заполните все обязательные поля")
-#                 return
-            
-#             # Проверяем доступность ключей в citizen_options
-#             try:
-#                 st.write(f"🔍 Проверяем citizen_options для ID {selected_citizen_id}")
-#                 st.write(f"citizen_options keys: {list(citizen_options.keys())}")
-#                 st.write(f"selected_citizen_id in citizen_options: {selected_citizen_id in citizen_options}")
-                
-#                 if selected_citizen_id in citizen_options:
-#                     citizen_name = citizen_options[selected_citizen_id]
-#                     st.write(f"✅ Имя гражданина: {citizen_name}")
-#                 else:
-#                     st.error(f"❌ ID {selected_citizen_id} не найден в citizen_options!")
-#                     st.write(f"Available IDs: {list(citizen_options.keys())}")
-#                     return
-                    
-#             except Exception as name_error:
-#                 st.error(f"❌ Ошибка получения имени гражданина: {str(name_error)}")
-#                 st.error(f"Тип ошибки: {type(name_error).__name__}")
-#                 return
-            
-#             # Начисляем баллы - максимально упрощенная версия
-#             try:
-#                 st.write("🔍 Начинаем SQL операцию...")
-                
-#                 # Фиксированный user ID для диагностики
-#                 current_user_id = 1
-#                 st.write(f"✅ Используем user ID: {current_user_id}")
-                
-#                 from datetime import datetime
-                
-#                 # Простейший SQL запрос
-#                 insert_query = """
-#                     INSERT INTO citizen_points 
-#                     (citizen_id, activity_type, points, description, date_earned, created_by, created_at)
-#                     VALUES (?, ?, ?, ?, ?, ?, ?)
-#                 """
-                
-#                 today = datetime.now().date().isoformat()
-#                 now = datetime.now().isoformat()
-#                 desc = description.strip() if description else f"Начисление за {activity_types[selected_activity]['display_name']}"
-                
-#                 params = (
-#                     int(selected_citizen_id),
-#                     selected_activity,
-#                     int(points_to_award),
-#                     desc,
-#                     today,
-#                     current_user_id,
-#                     now
-#                 )
-                
-#                 st.write(f"🔍 SQL параметры: {params}")
-                
-#                 # Выполняем запрос
-#                 result = points_model.db.execute_query(insert_query, params, fetch=False)
-#                 st.write(f"✅ Результат SQL вставки: {result}")
-                
-#                 if result is not None:
-#                     # Обновляем общие баллы гражданина
-#                     update_query = """
-#                         UPDATE citizens 
-#                         SET total_points = (
-#                             SELECT COALESCE(SUM(points), 0) 
-#                             FROM citizen_points 
-#                             WHERE citizen_id = ?
-#                         )
-#                         WHERE id = ?
-#                     """
-                    
-#                     update_result = points_model.db.execute_query(
-#                         update_query, 
-#                         (int(selected_citizen_id), int(selected_citizen_id)), 
-#                         fetch=False
-#                     )
-#                     st.write(f"✅ Результат обновления баллов: {update_result}")
-                    
-#                     show_success_message(f"✅ Начислено {points_to_award} баллов гражданину {citizen_name}")
-                    
-#                     # Показываем новые баллы
-#                     try:
-#                         updated_citizen = citizen_model.get_by_id(selected_citizen_id)
-#                         if updated_citizen:
-#                             new_total = updated_citizen.get('total_points', 0) or 0
-#                             st.success(f"💰 Новый баланс: **{new_total} баллов**")
-#                     except Exception as e:
-#                         st.warning(f"Не удалось обновить отображение баланса: {str(e)}")
-                    
-#                     st.session_state.points_action = "main"
-#                     st.rerun()
-#                 else:
-#                     show_error_message("❌ Ошибка при начислении баллов - SQL вернул None")
-                    
-#             except Exception as e:
-#                 show_error_message(f"❌ Ошибка при начислении баллов: {str(e)}")
-#                 st.error(f"Детали ошибки: {type(e).__name__}")
-#                 if hasattr(e, 'args') and e.args:
-#                     st.error(f"Аргументы ошибки: {e.args}")
-                
-#                 # Показываем stack trace для лучшей диагностики
-#                 import traceback
-#                 st.text("Stack trace:")
-#                 st.code(traceback.format_exc())
-
 def show_single_citizen_award_form(points_model: PointsModel, citizen_model: CitizenModel):
     """Форма начисления баллов одному гражданину - исправленная версия"""
     
@@ -566,64 +377,60 @@ def show_single_citizen_award_form(points_model: PointsModel, citizen_model: Cit
     from utils.helpers import format_date
     meeting_model = MeetingModel(citizen_model.db)
     
-    # Вспомогательная функция для безопасного получения значений из Row
-    def safe_get(row_obj, key, default=None):
-        """Безопасное получение значения из sqlite3.Row или dict"""
-        try:
-            if hasattr(row_obj, key):
-                return getattr(row_obj, key)
-            elif hasattr(row_obj, '__getitem__'):
-                return row_obj[key]
-            else:
-                return default
-        except (KeyError, AttributeError, IndexError):
-            return default
-    
-    # Функция для преобразования Row в dict
-    def row_to_dict(row):
-        """Преобразование sqlite3.Row в словарь"""
-        try:
-            return dict(row)
-        except:
-            try:
-                # Альтернативный способ
-                result = {}
-                for key in row.keys():
-                    result[key] = row[key]
-                return result
-            except:
-                return {}
-    
     with st.form("single_award_form"):
         col1, col2 = st.columns(2)
         
         with col1:
             # Выбор гражданина
             try:
+                st.write("🔍 Получаем список граждан...")
                 citizens_raw = citizen_model.get_active_citizens()
+                st.write(f"✅ Получено {len(citizens_raw)} граждан")
                 
                 # Преобразуем sqlite3.Row объекты в словари
                 citizens = []
-                citizen_options = {}
-                
                 for row in citizens_raw:
                     try:
-                        citizen_dict = row_to_dict(row)
-                        if citizen_dict and 'id' in citizen_dict and 'full_name' in citizen_dict:
-                            citizens.append(citizen_dict)
-                            citizen_options[citizen_dict['id']] = citizen_dict['full_name']
-                    except:
-                        # Если row_to_dict не работает, пробуем прямой доступ
+                        # Преобразуем Row в словарь
+                        citizen_dict = dict(row)
+                        citizens.append(citizen_dict)
+                    except Exception as row_error:
+                        st.error(f"❌ Ошибка преобразования строки: {str(row_error)}")
+                        # Альтернативный способ - через индексы
                         try:
-                            citizen_id = safe_get(row, 'id')
-                            full_name = safe_get(row, 'full_name')
-                            if citizen_id is not None and full_name is not None:
-                                citizen_options[citizen_id] = full_name
+                            citizen_dict = {
+                                'id': row[0],  # Предполагаем что id первый
+                                'full_name': row[1] if len(row) > 1 else 'Неизвестно',
+                                'total_points': row[2] if len(row) > 2 else 0
+                            }
+                            citizens.append(citizen_dict)
                         except:
+                            st.error(f"❌ Не удалось обработать строку базы данных")
                             continue
+                
+                # Проверяем структуру данных граждан
+                if citizens:
+                    st.write("🔍 Структура первого гражданина:")
+                    first_citizen = citizens[0]
+                    st.write(f"Keys: {list(first_citizen.keys())}")
+                    st.write(f"Sample data: {first_citizen}")
+                
+                citizen_options = {}
+                for c in citizens:
+                    try:
+                        # Теперь это должно работать
+                        if 'id' in c and 'full_name' in c:
+                            citizen_options[c['id']] = c['full_name']
+                        else:
+                            st.error(f"❌ У гражданина нет нужных полей: {c}")
+                    except Exception as citizen_error:
+                        st.error(f"❌ Ошибка обработки гражданина: {str(citizen_error)}")
+                
+                st.write(f"✅ Создан словарь с {len(citizen_options)} гражданами")
                 
             except Exception as e:
                 st.error(f"❌ Ошибка получения граждан: {str(e)}")
+                st.error(f"Тип ошибки: {type(e).__name__}")
                 return
             
             if not citizen_options:
@@ -637,15 +444,26 @@ def show_single_citizen_award_form(points_model: PointsModel, citizen_model: Cit
                 help="Гражданин для начисления баллов"
             )
             
+            st.write(f"🔍 Выбранный ID: {selected_citizen_id} (type: {type(selected_citizen_id)})")
+            
             # Показываем текущие баллы
             if selected_citizen_id:
                 try:
                     citizen_raw = citizen_model.get_by_id(selected_citizen_id)
                     if citizen_raw:
-                        current_points = safe_get(citizen_raw, 'total_points', 0) or 0
+                        # Преобразуем в словарь если это Row объект
+                        if hasattr(citizen_raw, 'keys'):
+                            citizen = dict(citizen_raw)
+                        else:
+                            citizen = citizen_raw
+                        
+                        st.write(f"🔍 Данные гражданина: {citizen}")
+                        current_points = citizen.get('total_points', 0) or 0
                         st.info(f"💰 Текущие баллы: **{current_points}**")
-                except:
-                    pass
+                    else:
+                        st.warning("⚠️ Не удалось получить данные гражданина")
+                except Exception as citizen_error:
+                    st.error(f"❌ Ошибка получения данных гражданина: {str(citizen_error)}")
             
             # Тип активности
             activity_types = {
@@ -691,42 +509,9 @@ def show_single_citizen_award_form(points_model: PointsModel, citizen_model: Cit
                 help="Комментарий к начислению баллов"
             )
             
-            # Связь с заседанием (упрощенная версия)
-            try:
-                recent_meetings = meeting_model.get_all(
-                    "meeting_date >= date('now', '-30 days')",
-                    order_by="meeting_date DESC"
-                )
-                
-                if recent_meetings:
-                    meeting_options = {None: "Не связано с заседанием"}
-                    for m in recent_meetings:
-                        try:
-                            meeting_id = safe_get(m, 'id')
-                            meeting_title = safe_get(m, 'title', 'Без названия')
-                            meeting_date = safe_get(m, 'meeting_date', '')
-                            
-                            if meeting_id is not None:
-                                try:
-                                    formatted_date = format_date(meeting_date) if meeting_date else ''
-                                    meeting_options[meeting_id] = f"{meeting_title} ({formatted_date})"
-                                except:
-                                    meeting_options[meeting_id] = meeting_title
-                        except:
-                            continue
-                    
-                    linked_meeting = st.selectbox(
-                        "Связанное заседание",
-                        options=list(meeting_options.keys()),
-                        format_func=lambda x: meeting_options.get(x, "Неизвестно"),
-                        help="Опционально: заседание, за которое начисляются баллы"
-                    )
-                else:
-                    linked_meeting = None
-                    st.info("📭 Нет недавних заседаний")
-            except:
-                linked_meeting = None
-                st.info("📭 Заседания недоступны")
+            # Связь с заседанием - упрощенная версия
+            st.info("📭 Связь с заседаниями временно отключена для диагностики")
+            linked_meeting = None
         
         # Кнопка отправки
         submitted = st.form_submit_button(
@@ -736,21 +521,42 @@ def show_single_citizen_award_form(points_model: PointsModel, citizen_model: Cit
         )
         
         if submitted:
+            st.write("🔍 Начинаем процесс начисления баллов...")
+            
             if not selected_citizen_id or not selected_activity:
                 st.error("❌ Заполните все обязательные поля")
                 return
             
-            # Начисляем баллы
+            # Проверяем доступность ключей в citizen_options
             try:
-                # Получаем имя гражданина
-                citizen_name = citizen_options.get(selected_citizen_id, "Неизвестный")
+                st.write(f"🔍 Проверяем citizen_options для ID {selected_citizen_id}")
+                st.write(f"citizen_options keys: {list(citizen_options.keys())}")
+                st.write(f"selected_citizen_id in citizen_options: {selected_citizen_id in citizen_options}")
                 
-                # Фиксированный user ID
+                if selected_citizen_id in citizen_options:
+                    citizen_name = citizen_options[selected_citizen_id]
+                    st.write(f"✅ Имя гражданина: {citizen_name}")
+                else:
+                    st.error(f"❌ ID {selected_citizen_id} не найден в citizen_options!")
+                    st.write(f"Available IDs: {list(citizen_options.keys())}")
+                    return
+                    
+            except Exception as name_error:
+                st.error(f"❌ Ошибка получения имени гражданина: {str(name_error)}")
+                st.error(f"Тип ошибки: {type(name_error).__name__}")
+                return
+            
+            # Начисляем баллы - максимально упрощенная версия
+            try:
+                st.write("🔍 Начинаем SQL операцию...")
+                
+                # Фиксированный user ID для диагностики
                 current_user_id = 1
+                st.write(f"✅ Используем user ID: {current_user_id}")
                 
                 from datetime import datetime
                 
-                # SQL запрос для начисления баллов
+                # Простейший SQL запрос
                 insert_query = """
                     INSERT INTO citizen_points 
                     (citizen_id, activity_type, points, description, date_earned, created_by, created_at)
@@ -771,8 +577,11 @@ def show_single_citizen_award_form(points_model: PointsModel, citizen_model: Cit
                     now
                 )
                 
+                st.write(f"🔍 SQL параметры: {params}")
+                
                 # Выполняем запрос
                 result = points_model.db.execute_query(insert_query, params, fetch=False)
+                st.write(f"✅ Результат SQL вставки: {result}")
                 
                 if result is not None:
                     # Обновляем общие баллы гражданина
@@ -786,30 +595,39 @@ def show_single_citizen_award_form(points_model: PointsModel, citizen_model: Cit
                         WHERE id = ?
                     """
                     
-                    points_model.db.execute_query(
+                    update_result = points_model.db.execute_query(
                         update_query, 
                         (int(selected_citizen_id), int(selected_citizen_id)), 
                         fetch=False
                     )
+                    st.write(f"✅ Результат обновления баллов: {update_result}")
                     
                     show_success_message(f"✅ Начислено {points_to_award} баллов гражданину {citizen_name}")
                     
                     # Показываем новые баллы
                     try:
-                        updated_citizen_raw = citizen_model.get_by_id(selected_citizen_id)
-                        if updated_citizen_raw:
-                            new_total = safe_get(updated_citizen_raw, 'total_points', 0) or 0
+                        updated_citizen = citizen_model.get_by_id(selected_citizen_id)
+                        if updated_citizen:
+                            new_total = updated_citizen.get('total_points', 0) or 0
                             st.success(f"💰 Новый баланс: **{new_total} баллов**")
-                    except:
-                        pass
+                    except Exception as e:
+                        st.warning(f"Не удалось обновить отображение баланса: {str(e)}")
                     
                     st.session_state.points_action = "main"
                     st.rerun()
                 else:
-                    show_error_message("❌ Ошибка при начислении баллов")
+                    show_error_message("❌ Ошибка при начислении баллов - SQL вернул None")
                     
             except Exception as e:
                 show_error_message(f"❌ Ошибка при начислении баллов: {str(e)}")
+                st.error(f"Детали ошибки: {type(e).__name__}")
+                if hasattr(e, 'args') and e.args:
+                    st.error(f"Аргументы ошибки: {e.args}")
+                
+                # Показываем stack trace для лучшей диагностики
+                import traceback
+                st.text("Stack trace:")
+                st.code(traceback.format_exc())
 
 
 def show_bulk_award_form(points_model: PointsModel, citizen_model: CitizenModel):
@@ -1596,16 +1414,25 @@ def show_citizen_points_details(points_model: PointsModel, citizen_model: Citize
 def get_quick_points_stats(points_model: PointsModel, citizen_model: CitizenModel) -> Dict[str, Any]:
     """Получение быстрой статистики системы баллов"""
     
-    # Активные граждане с баллами
-    active_citizens = citizen_model.count("is_active = 1 AND total_points > 0")
+    try:
+        # Активные граждане с баллами
+        active_citizens = citizen_model.count("is_active = 1 AND total_points > 0")
+    except:
+        active_citizens = 0
     
-    # Общая сумма баллов
-    total_points_query = "SELECT COALESCE(SUM(total_points), 0) as total FROM citizens WHERE is_active = 1"
-    total_result = citizen_model.db.execute_query(total_points_query)
-    total_points = total_result[0]['total'] if total_result else 0
+    try:
+        # Общая сумма баллов
+        total_points_query = "SELECT COALESCE(SUM(total_points), 0) as total FROM citizens WHERE is_active = 1"
+        total_result = citizen_model.db.execute_query(total_points_query)
+        total_points = safe_get(total_result[0], 'total', 0) if total_result else 0
+    except:
+        total_points = 0
     
-    # Активности за месяц
-    monthly_activities = points_model.count("date_earned >= date('now', '-30 days')")
+    try:
+        # Активности за месяц
+        monthly_activities = points_model.count("date_earned >= date('now', '-30 days')")
+    except:
+        monthly_activities = 0
     
     return {
         'active_citizens': active_citizens,
@@ -1629,8 +1456,29 @@ def get_recent_point_awards(points_model: PointsModel, limit: int = 10) -> List[
         LIMIT ?
     """
     
-    result = points_model.db.execute_query(query, (limit,))
-    return [dict(row) for row in result] if result else []
+    try:
+        result = points_model.db.execute_query(query, (limit,))
+        if result:
+            awards = []
+            for row in result:
+                award_dict = row_to_dict(row)
+                if not award_dict:  # Если row_to_dict не сработал
+                    award_dict = {
+                        'id': safe_get(row, 'id'),
+                        'citizen_id': safe_get(row, 'citizen_id'),
+                        'activity_type': safe_get(row, 'activity_type'),
+                        'points': safe_get(row, 'points'),
+                        'description': safe_get(row, 'description'),
+                        'created_at': safe_get(row, 'created_at'),
+                        'full_name': safe_get(row, 'full_name'),
+                        'meeting_title': safe_get(row, 'meeting_title')
+                    }
+                awards.append(award_dict)
+            return awards
+    except Exception as e:
+        pass
+    
+    return []
 
 
 def show_point_award_card(award: Dict[str, Any]):
@@ -1644,8 +1492,12 @@ def show_point_award_card(award: Dict[str, Any]):
         'initiative': '💡'
     }
     
-    icon = activity_icons.get(award['activity_type'], '⭐')
-    points = award['points']
+    icon = activity_icons.get(safe_get(award, 'activity_type', ''), '⭐')
+    points = safe_get(award, 'points', 0)
+    full_name = safe_get(award, 'full_name', 'Неизвестный')
+    description = safe_get(award, 'description', '')
+    meeting_title = safe_get(award, 'meeting_title', '')
+    created_at = safe_get(award, 'created_at', '')
     
     color = "green" if points > 0 else "red"
     
@@ -1653,13 +1505,13 @@ def show_point_award_card(award: Dict[str, Any]):
         col1, col2, col3 = st.columns([3, 1, 1])
         
         with col1:
-            st.markdown(f"{icon} **{award['full_name']}**")
+            st.markdown(f"{icon} **{full_name}**")
             
-            if award['description']:
-                st.caption(f"📝 {award['description']}")
+            if description:
+                st.caption(f"📝 {description}")
             
-            if award['meeting_title']:
-                st.caption(f"🏛️ {award['meeting_title']}")
+            if meeting_title:
+                st.caption(f"🏛️ {meeting_title}")
         
         with col2:
             st.markdown(f"""
@@ -1674,7 +1526,11 @@ def show_point_award_card(award: Dict[str, Any]):
             """, unsafe_allow_html=True)
         
         with col3:
-            st.caption(format_datetime(award['created_at'], 'short'))
+            if created_at:
+                try:
+                    st.caption(format_datetime(created_at, 'short'))
+                except:
+                    st.caption(str(created_at))
         
         st.markdown("---")
 

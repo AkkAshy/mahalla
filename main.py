@@ -307,7 +307,7 @@ def main():
                     title=settings.APP_TITLE,
                     icon=settings.APP_ICON
                 )
-            st.warning("main() запущена")
+
         except Exception as e:
             logger.error(f"Ошибка настройки страницы: {e}")
             # Базовая настройка страницы

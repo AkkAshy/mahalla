@@ -17,6 +17,45 @@ from models.sms import SMSModel
 from utils.helpers import create_metrics_row, create_pie_chart, create_bar_chart, format_date
 from utils.auth import get_current_user
 
+def safe_get(row_obj, key, default=None):
+    """Безопасное получение значения из sqlite3.Row или dict"""
+    try:
+        if row_obj is None:
+            return default
+        # Если это словарь
+        if hasattr(row_obj, 'get'):
+            return row_obj.get(key, default)
+        # Если это sqlite3.Row
+        elif hasattr(row_obj, '__getitem__'):
+            try:
+                return row_obj[key]
+            except (KeyError, IndexError):
+                return default
+        # Если это объект с атрибутами
+        elif hasattr(row_obj, key):
+            return getattr(row_obj, key, default)
+        else:
+            return default
+    except (KeyError, AttributeError, IndexError, TypeError):
+        return default
+
+def row_to_dict(row):
+    """Преобразование sqlite3.Row в словарь"""
+    if row is None:
+        return {}
+    try:
+        return dict(row)
+    except:
+        try:
+            # Альтернативный способ
+            result = {}
+            if hasattr(row, 'keys'):
+                for key in row.keys():
+                    result[key] = row[key]
+            return result
+        except:
+            return {}
+
 def show_dashboard():
     """Отображение главной страницы с дашбордом"""
     
@@ -31,8 +70,11 @@ def show_dashboard():
     sms_model = SMSModel(db)
     
     # Получаем данные пользователя
-    user = get_current_user()
-    user_name = user['full_name'] if user else "Пользователь"
+    try:
+        user = get_current_user()
+        user_name = safe_get(user, 'full_name', 'Пользователь') if user else "Пользователь"
+    except:
+        user_name = "Пользователь"
     
     # Приветствие
     current_time = datetime.now()
@@ -51,7 +93,10 @@ def show_dashboard():
     
     # Общее количество граждан
     with col1:
-        total_citizens = citizen_model.count("is_active = 1")
+        try:
+            total_citizens = citizen_model.count("is_active = 1")
+        except:
+            total_citizens = 0
         st.metric(
             label="👥 Всего граждан",
             value=total_citizens,
@@ -60,9 +105,12 @@ def show_dashboard():
     
     # Предстоящие заседания
     with col2:
-        upcoming_meetings = meeting_model.count(
-            "meeting_date >= date('now') AND status = 'PLANNED'"
-        )
+        try:
+            upcoming_meetings = meeting_model.count(
+                "meeting_date >= date('now') AND status = 'PLANNED'"
+            )
+        except:
+            upcoming_meetings = 0
         st.metric(
             label="🏛️ Предстоящие заседания",
             value=upcoming_meetings,
@@ -71,10 +119,13 @@ def show_dashboard():
     
     # SMS за месяц
     with col3:
-        start_month = date.today().replace(day=1)
-        sms_count = sms_model.count(
-            "created_at >= ?", (start_month.isoformat(),)
-        )
+        try:
+            start_month = date.today().replace(day=1)
+            sms_count = sms_model.count(
+                "created_at >= ?", (start_month.isoformat(),)
+            )
+        except:
+            sms_count = 0
         st.metric(
             label="📱 SMS за месяц",
             value=sms_count,
@@ -83,9 +134,12 @@ def show_dashboard():
     
     # Активные граждане (с баллами)
     with col4:
-        active_citizens = citizen_model.count(
-            "is_active = 1 AND total_points > 0"
-        )
+        try:
+            active_citizens = citizen_model.count(
+                "is_active = 1 AND total_points > 0"
+            )
+        except:
+            active_citizens = 0
         st.metric(
             label="⭐ Активные граждане",
             value=active_citizens,
@@ -101,57 +155,64 @@ def show_dashboard():
         # График посещаемости заседаний за последние месяцы
         st.markdown("### 📈 Динамика посещаемости заседаний")
         
-        # Получаем данные за последние 6 месяцев
-        attendance_data = get_attendance_dynamics(meeting_model)
-        
-        if attendance_data:
-            df = pd.DataFrame(attendance_data)
+        try:
+            # Получаем данные за последние 6 месяцев
+            attendance_data = get_attendance_dynamics(meeting_model)
             
-            fig = px.line(
-                df, x='month', y='attendance_rate',
-                title="Посещаемость заседаний по месяцам (%)",
-                markers=True
-            )
-            
-            fig.update_layout(
-                xaxis_title="Месяц",
-                yaxis_title="Посещаемость (%)",
-                showlegend=False,
-                height=400
-            )
-            
-            fig.update_traces(
-                hovertemplate="<b>%{x}</b><br>Посещаемость: %{y:.1f}%<extra></extra>"
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        else:
+            if attendance_data:
+                df = pd.DataFrame(attendance_data)
+                
+                fig = px.line(
+                    df, x='month', y='attendance_rate',
+                    title="Посещаемость заседаний по месяцам (%)",
+                    markers=True
+                )
+                
+                fig.update_layout(
+                    xaxis_title="Месяц",
+                    yaxis_title="Посещаемость (%)",
+                    showlegend=False,
+                    height=400
+                )
+                
+                fig.update_traces(
+                    hovertemplate="<b>%{x}</b><br>Посещаемость: %{y:.1f}%<extra></extra>"
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📊 Недостаточно данных для отображения графика")
+        except:
             st.info("📊 Недостаточно данных для отображения графика")
     
     with col_right:
         # Топ активных граждан
         st.markdown("### 🏆 Топ активных граждан")
         
-        top_citizens = points_model.get_leaderboard(limit=5)
-        
-        if top_citizens:
-            for i, citizen in enumerate(top_citizens, 1):
-                points = citizen.get('total_points', citizen.get('period_points', 0))
-                
-                with st.container():
-                    st.markdown(f"""
-                    <div style="
-                        background: linear-gradient(45deg, #f8f9fa, #e3f2fd);
-                        padding: 10px;
-                        border-radius: 8px;
-                        margin: 5px 0;
-                        border-left: 4px solid {'#ffd700' if i == 1 else '#c0c0c0' if i == 2 else '#cd7f32' if i == 3 else '#dee2e6'};
-                    ">
-                        <b>{i}. {citizen['full_name']}</b><br>
-                        <small>🏆 {points} баллов</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
+        try:
+            top_citizens_raw = points_model.get_leaderboard(limit=5)
+            
+            if top_citizens_raw:
+                for i, citizen_row in enumerate(top_citizens_raw, 1):
+                    points = safe_get(citizen_row, 'total_points', safe_get(citizen_row, 'period_points', 0))
+                    full_name = safe_get(citizen_row, 'full_name', 'Неизвестный')
+                    
+                    with st.container():
+                        st.markdown(f"""
+                        <div style="
+                            background: linear-gradient(45deg, #f8f9fa, #e3f2fd);
+                            padding: 10px;
+                            border-radius: 8px;
+                            margin: 5px 0;
+                            border-left: 4px solid {'#ffd700' if i == 1 else '#c0c0c0' if i == 2 else '#cd7f32' if i == 3 else '#dee2e6'};
+                        ">
+                            <b>{i}. {full_name}</b><br>
+                            <small>🏆 {points} баллов</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+            else:
+                st.info("🏆 Пока нет активных граждан")
+        except:
             st.info("🏆 Пока нет активных граждан")
     
     st.markdown("---")
@@ -163,56 +224,78 @@ def show_dashboard():
         # Распределение граждан по возрастным группам
         st.markdown("### 👨‍👩‍👧‍👦 Возрастные группы")
         
-        age_stats = citizen_model.get_age_statistics()
-        
-        if age_stats:
-            fig = create_pie_chart(
-                age_stats,
-                "Распределение граждан по возрасту"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
+        try:
+            age_stats = citizen_model.get_age_statistics()
+            
+            if age_stats:
+                # Безопасно обрабатываем age_stats
+                if isinstance(age_stats, list) and age_stats:
+                    # Если это список Row объектов
+                    age_data = {}
+                    for row in age_stats:
+                        keys = list(row.keys()) if hasattr(row, 'keys') else []
+                        if len(keys) >= 2:
+                            age_group = safe_get(row, keys[0], 'Неизвестно')
+                            count = safe_get(row, keys[1], 0)
+                            age_data[age_group] = count
+                    age_stats = age_data
+                
+                if age_stats and isinstance(age_stats, dict):
+                    fig = px.pie(
+                        values=list(age_stats.values()),
+                        names=list(age_stats.keys()),
+                        title="Распределение граждан по возрасту"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("📊 Нет данных о возрасте граждан")
+            else:
+                st.info("📊 Нет данных о возрасте граждан")
+        except:
             st.info("📊 Нет данных о возрасте граждан")
     
     with col2:
         # Статистика заседаний по статусам
         st.markdown("### 📋 Статистика заседаний")
         
-        meeting_stats = get_meeting_statistics(meeting_model)
-        
-        if meeting_stats:
-            # Цветовая схема для статусов
-            colors = {
-                'PLANNED': '#2196F3',    # Синий
-                'COMPLETED': '#4CAF50',  # Зеленый  
-                'CANCELLED': '#F44336'   # Красный
-            }
+        try:
+            meeting_stats = get_meeting_statistics(meeting_model)
             
-            status_names = {
-                'PLANNED': 'Запланировано',
-                'COMPLETED': 'Проведено',
-                'CANCELLED': 'Отменено'
-            }
-            
-            labels = [status_names.get(k, k) for k in meeting_stats.keys()]
-            values = list(meeting_stats.values())
-            plot_colors = [colors.get(k, '#999999') for k in meeting_stats.keys()]
-            
-            fig = go.Figure(data=[go.Pie(
-                labels=labels,
-                values=values,
-                marker_colors=plot_colors,
-                hovertemplate='<b>%{label}</b><br>Количество: %{value}<br>Процент: %{percent}<extra></extra>'
-            )])
-            
-            fig.update_layout(
-                title="Заседания по статусам",
-                showlegend=True,
-                height=400
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        else:
+            if meeting_stats:
+                # Цветовая схема для статусов
+                colors = {
+                    'PLANNED': '#2196F3',    # Синий
+                    'COMPLETED': '#4CAF50',  # Зеленый  
+                    'CANCELLED': '#F44336'   # Красный
+                }
+                
+                status_names = {
+                    'PLANNED': 'Запланировано',
+                    'COMPLETED': 'Проведено',
+                    'CANCELLED': 'Отменено'
+                }
+                
+                labels = [status_names.get(k, k) for k in meeting_stats.keys()]
+                values = list(meeting_stats.values())
+                plot_colors = [colors.get(k, '#999999') for k in meeting_stats.keys()]
+                
+                fig = go.Figure(data=[go.Pie(
+                    labels=labels,
+                    values=values,
+                    marker_colors=plot_colors,
+                    hovertemplate='<b>%{label}</b><br>Количество: %{value}<br>Процент: %{percent}<extra></extra>'
+                )])
+                
+                fig.update_layout(
+                    title="Заседания по статусам",
+                    showlegend=True,
+                    height=400
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📊 Нет данных о заседаниях")
+        except:
             st.info("📊 Нет данных о заседаниях")
     
     # Блок с последними активностями
@@ -223,74 +306,100 @@ def show_dashboard():
     
     with col1:
         st.markdown("#### 🏛️ Недавние заседания")
-        recent_meetings = meeting_model.get_all(
-            "meeting_date >= date('now', '-30 days')",
-            order_by="meeting_date DESC"
-        )[:5]
-        
-        if recent_meetings:
-            for meeting in recent_meetings:
-                status_colors = {
-                    'PLANNED': '🔵',
-                    'COMPLETED': '✅',
-                    'CANCELLED': '❌'
-                }
-                
-                status_icon = status_colors.get(meeting['status'], '⚪')
-                meeting_date = format_date(meeting['meeting_date'])
-                
-                st.markdown(f"""
-                <div style="
-                    background: #f8f9fa;
-                    padding: 10px;
-                    border-radius: 5px;
-                    margin: 5px 0;
-                    border-left: 3px solid #dee2e6;
-                ">
-                    {status_icon} <b>{meeting['title']}</b><br>
-                    <small>📅 {meeting_date} | 👥 {meeting['attendance_count']}/{meeting['total_invited']}</small>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
+        try:
+            recent_meetings = meeting_model.get_all(
+                "meeting_date >= date('now', '-30 days')",
+                order_by="meeting_date DESC"
+            )[:5]
+            
+            if recent_meetings:
+                for meeting_row in recent_meetings:
+                    status_colors = {
+                        'PLANNED': '🔵',
+                        'COMPLETED': '✅',
+                        'CANCELLED': '❌'
+                    }
+                    
+                    status = safe_get(meeting_row, 'status', 'UNKNOWN')
+                    status_icon = status_colors.get(status, '⚪')
+                    title = safe_get(meeting_row, 'title', 'Без названия')
+                    meeting_date_str = safe_get(meeting_row, 'meeting_date', '')
+                    attendance_count = safe_get(meeting_row, 'attendance_count', 0)
+                    total_invited = safe_get(meeting_row, 'total_invited', 0)
+                    
+                    try:
+                        meeting_date = format_date(meeting_date_str) if meeting_date_str else 'Дата не указана'
+                    except:
+                        meeting_date = str(meeting_date_str)
+                    
+                    st.markdown(f"""
+                    <div style="
+                        background: #f8f9fa;
+                        padding: 10px;
+                        border-radius: 5px;
+                        margin: 5px 0;
+                        border-left: 3px solid #dee2e6;
+                    ">
+                        {status_icon} <b>{title}</b><br>
+                        <small>📅 {meeting_date} | 👥 {attendance_count}/{total_invited}</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("Нет недавних заседаний")
+        except:
             st.info("Нет недавних заседаний")
     
     with col2:
         st.markdown("#### ⭐ Недавние начисления баллов")
-        recent_points = points_model.get_all(
-            "date_earned >= date('now', '-7 days')",
-            order_by="created_at DESC"
-        )[:5]
-        
-        if recent_points:
-            for point_record in recent_points:
-                # Получаем информацию о гражданине
-                citizen = citizen_model.get_by_id(point_record['citizen_id'])
-                citizen_name = citizen['full_name'] if citizen else "Неизвестный"
-                
-                activity_icons = {
-                    'meeting_attendance': '🏛️',
-                    'subbotnik': '🧹',
-                    'community_work': '🤝',
-                    'volunteer_work': '❤️'
-                }
-                
-                icon = activity_icons.get(point_record['activity_type'], '⭐')
-                points = point_record['points']
-                date_earned = format_date(point_record['date_earned'])
-                
-                st.markdown(f"""
-                <div style="
-                    background: #f8f9fa;
-                    padding: 10px;
-                    border-radius: 5px;
-                    margin: 5px 0;
-                    border-left: 3px solid #4CAF50;
-                ">
-                    {icon} <b>{citizen_name}</b><br>
-                    <small>+{points} баллов | {date_earned}</small>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
+        try:
+            recent_points = points_model.get_all(
+                "date_earned >= date('now', '-7 days')",
+                order_by="created_at DESC"
+            )[:5]
+            
+            if recent_points:
+                for point_record_row in recent_points:
+                    # Получаем информацию о гражданине
+                    citizen_id = safe_get(point_record_row, 'citizen_id')
+                    
+                    try:
+                        citizen_row = citizen_model.get_by_id(citizen_id) if citizen_id else None
+                        citizen_name = safe_get(citizen_row, 'full_name', 'Неизвестный') if citizen_row else "Неизвестный"
+                    except:
+                        citizen_name = "Неизвестный"
+                    
+                    activity_icons = {
+                        'meeting_attendance': '🏛️',
+                        'subbotnik': '🧹',
+                        'community_work': '🤝',
+                        'volunteer_work': '❤️'
+                    }
+                    
+                    activity_type = safe_get(point_record_row, 'activity_type', '')
+                    icon = activity_icons.get(activity_type, '⭐')
+                    points = safe_get(point_record_row, 'points', 0)
+                    date_earned_str = safe_get(point_record_row, 'date_earned', '')
+                    
+                    try:
+                        date_earned = format_date(date_earned_str) if date_earned_str else 'Дата не указана'
+                    except:
+                        date_earned = str(date_earned_str)
+                    
+                    st.markdown(f"""
+                    <div style="
+                        background: #37535C;
+                        padding: 10px;
+                        border-radius: 5px;
+                        margin: 5px 0;
+                        border-left: 3px solid #4CAF50;
+                    ">
+                        {icon} <b>{citizen_name}</b><br>
+                        <small>+{points} баллов | {date_earned}</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("Нет недавних начислений")
+        except:
             st.info("Нет недавних начислений")
     
     # Быстрые действия
@@ -352,29 +461,32 @@ def get_attendance_dynamics(meeting_model: MeetingModel) -> List[Dict[str, Any]]
         ORDER BY month
     """
     
-    result = meeting_model.db.execute_query(
-        query, 
-        (start_date.isoformat(), end_date.isoformat())
-    )
-    
-    if result:
-        data = []
-        for row in result:
-            # Преобразуем месяц в читаемый формат
-            month_str = row['month']
-            try:
-                month_date = datetime.strptime(month_str, '%Y-%m')
-                month_name = month_date.strftime('%b %Y')
-            except:
-                month_name = month_str
-            
-            data.append({
-                'month': month_name,
-                'attendance_rate': round(row['attendance_rate'], 1),
-                'meetings_count': row['meetings_count']
-            })
+    try:
+        result = meeting_model.db.execute_query(
+            query, 
+            (start_date.isoformat(), end_date.isoformat())
+        )
         
-        return data
+        if result:
+            data = []
+            for row in result:
+                # Преобразуем месяц в читаемый формат
+                month_str = safe_get(row, 'month', '')
+                try:
+                    month_date = datetime.strptime(month_str, '%Y-%m')
+                    month_name = month_date.strftime('%b %Y')
+                except:
+                    month_name = month_str
+                
+                data.append({
+                    'month': month_name,
+                    'attendance_rate': round(safe_get(row, 'attendance_rate', 0), 1),
+                    'meetings_count': safe_get(row, 'meetings_count', 0)
+                })
+            
+            return data
+    except:
+        pass
     
     return []
 
@@ -396,10 +508,18 @@ def get_meeting_statistics(meeting_model: MeetingModel) -> Dict[str, int]:
         GROUP BY status
     """
     
-    result = meeting_model.db.execute_query(query)
-    
-    if result:
-        return {row['status']: row['count'] for row in result}
+    try:
+        result = meeting_model.db.execute_query(query)
+        
+        if result:
+            stats = {}
+            for row in result:
+                status = safe_get(row, 'status', 'UNKNOWN')
+                count = safe_get(row, 'count', 0)
+                stats[status] = count
+            return stats
+    except:
+        pass
     
     return {}
 
@@ -422,7 +542,8 @@ def handle_quick_actions():
         st.info("🔄 Подготовка экспорта данных...")
     
     # Очищаем действие
-    del st.session_state.quick_action
+    if hasattr(st.session_state, 'quick_action'):
+        del st.session_state.quick_action
 
 
 def show_system_info():
@@ -485,7 +606,7 @@ def apply_dashboard_styles():
         
         /* Стили для карточек событий */
         .event-card {
-            background: white;
+            background: #37535C;
             border-radius: 8px;
             padding: 15px;
             margin: 10px 0;
